@@ -28,6 +28,9 @@
 # damage to property. The software developed by NIST employees is not subject to
 # copyright protection within the United States.
 
+# Exit immediately if a command fails
+set -e
+
 if ! command -v realpath &>/dev/null; then
     echo "Package \"coreutils\" not found, installing..."
     sudo apt-get install -y coreutils
@@ -57,14 +60,12 @@ if [ ! -f "configs/ue1.conf" ]; then
 fi
 echo "Starting User Equipment in background..."
 mkdir -p logs
-sudo chown -R $USER:$USER logs
 >logs/ue${UE_NUMBER}_stdout.txt
 
 sudo setsid bash -c "stdbuf -oL -eL \"$SCRIPT_DIR/run.sh\" $UE_NUMBER > logs/ue${UE_NUMBER}_stdout.txt 2>&1" </dev/null &
-sleep 1
 
 ATTEMPT=0
-while ! ./is_running.sh | grep -q "ue$UE_NUMBER" do
+while ! ./is_running.sh | grep -q "ue$UE_NUMBER"; do
     sleep 0.5
     ATTEMPT=$((ATTEMPT + 1))
     if [ $ATTEMPT -ge 120 ]; then

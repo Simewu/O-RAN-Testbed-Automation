@@ -68,16 +68,14 @@ fi
 echo "Restoring gNodeB configuration file..."
 rm -rf configs
 mkdir configs
-rm -rf logs
-cp srsRAN_Project/configs/gnb_rf_b200_tdd_n78_20mhz.yml configs/gnb.yaml
 
-# Function to prompt user for IP address
-prompt_for_e2term_ip() {
-    echo "Please enter the IP address of the service." >&2
-    echo "You can find this by running: kubectl get service -n ricplt | grep service-ricplt-e2term-sctp" >&2
-    read -p "Enter IP Address: " USER_IP
-    echo "$USER_IP"
-}
+# Only remove the logs if is not running
+RUNNING_STATUS=$(./is_running.sh)
+if [[ $RUNNING_STATUS != *": RUNNING"* ]]; then
+    rm -rf logs
+    mkdir logs
+fi
+cp srsRAN_Project/configs/gnb_rf_b200_tdd_n78_20mhz.yml configs/gnb.yaml
 
 ENABLE_E2_TERM="true"
 if [ ! -d "../RAN_Intelligent_Controllers/Near-Real-Time-RIC" ]; then
@@ -98,16 +96,17 @@ if [ "$ENABLE_E2_TERM" = "true" ]; then
     fi
 
     # Check if kubectl is installed
+    PROMPT_FOR_E2_ADDRESS="false"
     if ! command -v kubectl &>/dev/null; then
         echo "Could not find kubectl."
-        IP_E2TERM=$(prompt_for_e2term_ip)
+        PROMPT_FOR_E2_ADDRESS="true"
     else
-        SERVICE_INFO=$(kubectl get service -n ricplt | grep service-ricplt-e2term-sctp)
+        SERVICE_INFO=$(kubectl get service -n ricplt 2>/dev/null | grep service-ricplt-e2term-sctp || echo "")
 
         # Check if SERVICE_INFO is empty
         if [ -z "$SERVICE_INFO" ]; then
             echo "No service found or kubectl command failed."
-            IP_E2TERM=$(prompt_for_e2term_ip)
+            PROMPT_FOR_E2_ADDRESS="true"
         else
             # Use awk to extract the IP and the correct port based on the connection context
             IP_E2TERM=$(echo "$SERVICE_INFO" | awk '{print $3}')
@@ -118,21 +117,37 @@ if [ "$ENABLE_E2_TERM" = "true" ]; then
             fi
 
             if [ -z "$IP_E2TERM" ] || [ "$IP_E2TERM" == "<none>" ]; then
-                IP_E2TERM=$(prompt_for_e2term_ip)
+                PROMPT_FOR_E2_ADDRESS="true"
             fi
         fi
     fi
-    # Calculate the bind address based on the IP address
-    # if [[ "$IP_E2TERM" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    #     # Extract the first three octets and append .1
-    #     IP_E2TERM_BIND=$(echo "$IP_E2TERM" | cut -d '.' -f1-3).1
-    # else
-    #     IP_E2TERM_BIND=$IP_E2TERM
-    # fi
-    IP_E2TERM_BIND=$IP_E2TERM
-    echo "IP_E2TERM: $IP_E2TERM"
-    echo "PORT_E2TERM: $PORT_E2TERM"
-    echo "IP_E2TERM_BIND: $IP_E2TERM_BIND"
+
+    if [ "$PROMPT_FOR_E2_ADDRESS" = "true" ]; then
+        echo
+        echo "Please enter the IP address where the E2 termination service is located."
+        echo "You can find this by running: kubectl get service -n ricplt | grep service-ricplt-e2term-sctp"
+        echo "Type \"\" to disable E2 support in the gNodeB configuration."
+        read -p "Enter IP Address: " IP_E2TERM
+        IP_E2TERM=$(echo "$IP_E2TERM" | xargs) # Trim whitespace
+    fi
+
+    if [ -z "$IP_E2TERM" ]; then
+        echo
+        echo "No E2 address was provided, disabling E2 termination support."
+        ENABLE_E2_TERM="false"
+    else
+        # Calculate the bind address based on the IP address
+        # if [[ "$IP_E2TERM" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        #     # Extract the first three octets and append .1
+        #     IP_E2TERM_BIND=$(echo "$IP_E2TERM" | cut -d '.' -f1-3).1
+        # else
+        #     IP_E2TERM_BIND=$IP_E2TERM
+        # fi
+        IP_E2TERM_BIND=$IP_E2TERM
+        echo "IP_E2TERM: $IP_E2TERM"
+        echo "PORT_E2TERM: $PORT_E2TERM"
+        echo "IP_E2TERM_BIND: $IP_E2TERM_BIND"
+    fi
 fi
 
 echo "Fetching AMF addresses..."
@@ -271,9 +286,6 @@ else
     update_yaml "configs/gnb.yaml" "e2" "enable_du_e2" "false"
     update_yaml "configs/gnb.yaml" "e2" "e2sm_kpm_enabled" "false"
     update_yaml "configs/gnb.yaml" "e2" "e2sm_rc_enabled" "false"
-    update_yaml "configs/gnb.yaml" "e2" "addr" null
-    update_yaml "configs/gnb.yaml" "e2" "bind_addr" null
-    update_yaml "configs/gnb.yaml" "e2" "port" null
 fi
 
 # Update configuration values for CU-CP
@@ -336,8 +348,5 @@ if [ $(nproc) -lt 4 ]; then
     echo "The number of threads is less than 4. Setting nof_non_rt_threads to $(nproc)."
     update_yaml "configs/gnb.yaml" "expert_execution.threads.non_rt" "nof_non_rt_threads" "$(nproc)"
 fi
-
-mkdir -p logs
-sudo chown $USER:$USER -R logs
 
 echo "Successfully configured the gNodeB. The configuration file is located in the configs/ directory."

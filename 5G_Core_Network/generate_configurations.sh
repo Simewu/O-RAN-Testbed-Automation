@@ -39,6 +39,14 @@ fi
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 cd "$SCRIPT_DIR"
 
+# If EXPOSE_AMF_OVER_HOSTNAME is false, AMF will use 127.0.0.5, otherwise, it will use the hostname IP
+EXPOSE_AMF_OVER_HOSTNAME=false
+
+# Set IS_OPEN5GS_ON_HOST if Open5GS will run on the host machine, otherwise, set it to false
+if [ "$EXPOSE_AMF_OVER_HOSTNAME" = true ]; then
+    IS_OPEN5GS_ON_HOST=true
+fi
+
 # Check if the YAML editor is installed, and install it if not
 if ! command -v yq &>/dev/null; then
     sudo "$SCRIPT_DIR/install_scripts/./install_yq.sh"
@@ -62,9 +70,15 @@ echo "MNC (Mobile Network Code): $PLMN_MNC"
 echo "TAC value: $TAC"
 
 echo "Creating configs directory..."
-rm -rf "$SCRIPT_DIR/configs"
-mkdir "$SCRIPT_DIR/configs"
-rm -rf "$SCRIPT_DIR/logs"
+rm -rf configs
+mkdir configs
+
+# Only remove the logs if no component is running
+RUNNING_STATUS=$(./is_running.sh)
+if [[ $RUNNING_STATUS != *": RUNNING"* ]]; then
+    rm -rf logs
+    mkdir logs
+fi
 
 APPS=("mmed" "sgwcd" "smfd" "amfd" "sgwud" "upfd" "hssd" "pcrfd" "nrfd" "scpd" "seppd" "ausfd" "udmd" "pcfd" "nssfd" "bsfd" "udrd" "webui")
 
@@ -187,26 +201,6 @@ configure_logging() {
     update_yaml "$CONFIG_PATH" "logger.file" "path" "$SCRIPT_DIR/$LOG_PATH"
 }
 
-# Function to get the primary IP for the network segment by resetting the last octet to 1
-get_primary_ip_for_network() {
-    local IP_ADDRESS=$1
-    # Extract the first three octets and append .1 to get the primary IP for the network
-    local PRIMARY_IP=$(echo "$IP_ADDRESS" | awk -F '.' '{print $1"."$2"."$3".1"}')
-    echo $PRIMARY_IP
-}
-
-# Function to get the ngap_server configuration IP
-get_configuration_ngap_server_ip() {
-    local FILE_PATH="configs/amf.yaml"
-    # Use yq to parse the YAML file and extract the IP address
-    local IP_ADDRESS=$(yq e '.amf.ngap.server[0].address' "$FILE_PATH")
-    if [[ -n $IP_ADDRESS ]]; then
-        echo $IP_ADDRESS
-    else
-        echo "IP address not found."
-    fi
-}
-
 # Function to set the ngap_server configuration IP
 set_configuration_ngap_and_gptu_server_ip() {
     local AMF_FILE_PATH="configs/amf.yaml"
@@ -217,17 +211,22 @@ set_configuration_ngap_and_gptu_server_ip() {
     yq e -i ".upf.gtpu.server[0].address = \"$IP_ADDRESS\"" "$UPF_FILE_PATH"
 }
 
-# To expose the core network to the external network, set EXPOSE_CORE_EXTERNALLY to true
-EXPOSE_CORE_EXTERNALLY=false
-
-if [ "$EXPOSE_CORE_EXTERNALLY" = true ]; then
-    IP_ADDRESS=$(hostname -I | awk '{print $1}')
-    set_configuration_ngap_and_gptu_server_ip $IP_ADDRESS
+if [ "$EXPOSE_AMF_OVER_HOSTNAME" = true ]; then
+    AMF_IP=$(hostname -I | awk '{print $1}')
+    set_configuration_ngap_and_gptu_server_ip $AMF_IP
+    # Need an address for the gNodeB to bind to that is not the host IP.
+    if [ "$IS_OPEN5GS_ON_HOST" = true ]; then
+        AMF_IP_BIND="10.45.0.1"
+    else
+        AMF_IP_BIND=$AMF_IP
+    fi
+else
+    AMF_IP="127.0.0.5"
+    AMF_IP_BIND="127.0.0.1"
 fi
 
 # Get the following AMF IP, and it will be updated in the configuration file
-AMF_IP=$(get_configuration_ngap_server_ip)
-AMF_IP_BIND=$(get_primary_ip_for_network $AMF_IP)
+
 AMF_ADDRESSES_OUTPUT="configs/get_amf_address.txt"
 echo "$AMF_IP" >$AMF_ADDRESSES_OUTPUT
 echo "$AMF_IP_BIND" >>$AMF_ADDRESSES_OUTPUT
@@ -235,7 +234,7 @@ echo "$AMF_IP_BIND" >>$AMF_ADDRESSES_OUTPUT
 # Configure logging for all components
 for APP_NAME in "${APP_NAMES[@]}"; do
     if [ -f "configs/${APP_NAME}.yaml" ]; then
-        configure_logging "logs/${APP_NAME}.txt" "configs/${APP_NAME}.yaml"
+        configure_logging "logs/${APP_NAME}.log" "configs/${APP_NAME}.yaml"
     fi
 done
 
@@ -253,9 +252,6 @@ echo "By default, Ubuntu enables a firewall that blocks the UE from accessing th
 sudo ufw status || true
 sudo ./install_scripts/disable_firewall.sh
 sudo ufw status || true
-
-mkdir -p "$SCRIPT_DIR/logs"
-sudo chown $USER:$USER -R "$SCRIPT_DIR/logs"
 
 echo "Registering UE 1..."
 ./install_scripts/register_subscriber.sh --imsi 001010123456780 --key 00112233445566778899AABBCCDDEEFF --opc 63BFA50EE6523365FF14C1F45F88737D --apn srsapn
