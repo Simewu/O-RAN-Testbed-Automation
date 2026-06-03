@@ -31,11 +31,9 @@
 # Exit immediately if a command fails
 set -e
 
-UE_NUMBERS=(1 2 3 4)
 EXPOSE_GNB_TO_HOSTNAME=false
-
-# FLEXRIC_LIBRARY_DIR="/usr/local/lib/flexric/" # Default
-FLEXRIC_LIBRARY_DIR="flexric/build/flexric_libraries/lib/flexric/"
+UE_NUMBERS=(1 2 3 4)
+USE_FLEXRIC=false
 
 APTVARS="NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive"
 if ! command -v realpath &>/dev/null; then
@@ -150,26 +148,17 @@ if [ ! -f "$BASE_EXAMPLE_CONFIG_PATH" ]; then
 fi
 cp "$BASE_EXAMPLE_CONFIG_PATH" configs/gnb.yaml
 
-if [ ! -d "../RAN_Intelligent_Controllers/Near-Real-Time-RIC" ]; then
+if [ ! -d "../RAN_Intelligent_Controllers/Near-Real-Time-RIC" ] && [ "$USE_FLEXRIC" = "false" ]; then
     echo "Could not find the Near-Real-Time-RIC directory. Disabling E2 termination support."
     ENABLE_E2_TERM="false"
 fi
 
-is_tcp_endpoint_reachable() {
-    local host="$1"
-    local port="$2"
-    if [ -z "$host" ] || [ -z "$port" ]; then
-        return 1
-    fi
-    if command -v timeout &>/dev/null; then
-        timeout 2 bash -c "cat </dev/null >/dev/tcp/${host}/${port}" &>/dev/null
-    else
-        bash -c "cat </dev/null >/dev/tcp/${host}/${port}" &>/dev/null
-    fi
-}
-
 if [ "$ENABLE_E2_TERM" = "true" ]; then
-    PORT_E2TERM=36422
+    if [ "$USE_FLEXRIC" = "true" ]; then
+        PORT_E2TERM=36421
+    else
+        PORT_E2TERM=36422
+    fi
 
     # If E2_ADDRESS is provided, override logic and force E2 address
     if [ "$E2_ADDRESS" != "null" ]; then
@@ -179,6 +168,10 @@ if [ "$ENABLE_E2_TERM" = "true" ]; then
         echo "IP_E2TERM: $IP_E2TERM"
         echo "PORT_E2TERM: $PORT_E2TERM"
         echo "IP_E2TERM_BIND: $IP_E2TERM_BIND"
+    elif [ "$USE_FLEXRIC" = "true" ]; then
+        IP_E2TERM="127.0.0.1"
+        IP_E2TERM_BIND="127.0.0.1"
+        echo "FlexRIC selected. Using IP: $IP_E2TERM, Port: $PORT_E2TERM"
     else
         echo "Fetching E2 termination service IP address..."
 
@@ -219,17 +212,10 @@ if [ "$ENABLE_E2_TERM" = "true" ]; then
             echo "No E2 address was provided, disabling E2 termination support."
             ENABLE_E2_TERM="false"
         else
-            if ! is_tcp_endpoint_reachable "$IP_E2TERM" "$PORT_E2TERM"; then
-                echo
-                echo "Could not reach E2 termination service at $IP_E2TERM:$PORT_E2TERM from this host."
-                echo "Disabling E2 termination support to prevent gNodeB startup failure."
-                ENABLE_E2_TERM="false"
-            else
-                IP_E2TERM_BIND=$IP_E2TERM
-                echo "IP_E2TERM: $IP_E2TERM"
-                echo "PORT_E2TERM: $PORT_E2TERM"
-                echo "IP_E2TERM_BIND: $IP_E2TERM_BIND"
-            fi
+            IP_E2TERM_BIND=$IP_E2TERM
+            echo "IP_E2TERM: $IP_E2TERM"
+            echo "PORT_E2TERM: $PORT_E2TERM"
+            echo "IP_E2TERM_BIND: $IP_E2TERM_BIND"
         fi
     fi
 fi
@@ -282,6 +268,14 @@ update_yaml() {
     local SECTION=$2
     local PROPERTY=$3
     local VALUE=$4
+
+    # Three arguments: file, property_path, value
+    if [ "$#" -eq 3 ]; then
+        SECTION=""
+        PROPERTY=$2
+        VALUE=$3
+    fi
+
     if [[ ! -z "$SECTION" ]]; then
         SECTION=".$SECTION"
     fi
@@ -295,22 +289,15 @@ update_yaml() {
         echo "Skipping empty value for $SECTION.$PROPERTY"
         return
     fi
-    # If the PROPERTY is nested (contains dots), handle it properly
-    if [[ "$PROPERTY" == *.* ]]; then
-        local PARENT_PROPERTY=$(echo "$PROPERTY" | cut -d '.' -f 1)
-        local NESTED_PROPERTY=$(echo "$PROPERTY" | cut -d '.' -f 2-)
 
-        yq eval -i "${SECTION}.${PARENT_PROPERTY}.${NESTED_PROPERTY} = \"$VALUE\"" "$FILE_PATH"
+    # If the value is numeric or boolean, don't quote it
+    # PLMN should be treated as string
+    if [[ "$PROPERTY" == "plmn" || "$PROPERTY" == "plmn_list" || "$PROPERTY" == *".plmn" || "$PROPERTY" == *".plmn_list" ]]; then
+        yq eval -i "${SECTION}.${PROPERTY} = \"$VALUE\"" "$FILE_PATH"
+    elif [[ "$VALUE" =~ ^[0-9]+$ || "$VALUE" =~ ^[0-9]+\.[0-9]+$ || "$VALUE" =~ ^(true|false)$ ]]; then
+        yq eval -i "${SECTION}.${PROPERTY} = ${VALUE}" "$FILE_PATH"
     else
-        # If the value is numeric or boolean, don't quote it
-        # PLMN should always be treated as a string
-        if [[ "$PROPERTY" == "plmn" || "$PROPERTY" == "plmn_list" ]]; then
-            yq eval -i "${SECTION}.${PROPERTY} = \"$VALUE\"" "$FILE_PATH"
-        elif [[ "$VALUE" =~ ^[0-9]+$ || "$VALUE" =~ ^[0-9]+\.[0-9]+$ || "$VALUE" =~ ^(true|false)$ ]]; then
-            yq eval -i "${SECTION}.${PROPERTY} = ${VALUE}" "$FILE_PATH"
-        else
-            yq eval -i "${SECTION}.${PROPERTY} = \"$VALUE\"" "$FILE_PATH"
-        fi
+        yq eval -i "${SECTION}.${PROPERTY} = \"$VALUE\"" "$FILE_PATH"
     fi
 }
 
@@ -414,26 +401,26 @@ update_yaml "configs/gnb.yaml" "" "gnb_id_bit_length" "22" # Supported: 22-32
 update_yaml "configs/gnb.yaml" "" "ran_node_name" "$RAN_NODE_NAME"
 update_yaml "configs/gnb.yaml" "" "gnb_du_id" "$GNB_DU_ID"
 
-if [[ "$FLEXRIC_LIBRARY_DIR" != /* ]]; then
-    FULL_SM_DIR="$(realpath "$SCRIPT_DIR/../RAN_Intelligent_Controllers/Flexible-RIC/$FLEXRIC_LIBRARY_DIR" 2>/dev/null || echo "$SCRIPT_DIR/../RAN_Intelligent_Controllers/Flexible-RIC/$FLEXRIC_LIBRARY_DIR")"
-else
-    FULL_SM_DIR="$FLEXRIC_LIBRARY_DIR"
-fi
-if [[ "$FULL_SM_DIR" != */ ]]; then
-    FULL_SM_DIR="${FULL_SM_DIR}/"
-fi
-
 # Update configuration values to connect RIC by e2 interface
 if [ "$ENABLE_E2_TERM" = "true" ]; then
+    INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1)
+    HOST_IP=$(ip addr show $INTERFACE | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+
     update_yaml "configs/gnb.yaml" "e2" "enable_du_e2" "true"
     update_yaml "configs/gnb.yaml" "e2" "enable_cu_cp_e2" "false"
     update_yaml "configs/gnb.yaml" "e2" "enable_cu_up_e2" "false"
     update_yaml "configs/gnb.yaml" "e2" "e2sm_kpm_enabled" "true"
     update_yaml "configs/gnb.yaml" "e2" "e2sm_rc_enabled" "true"
     update_yaml "configs/gnb.yaml" "e2" "addr" "$IP_E2TERM"
-    update_yaml "configs/gnb.yaml" "e2" "bind_addr" "$IP_E2TERM_BIND"
+    sed -i "0,/addr:/{s/addr: .*/addr: $IP_E2TERM  # E2 terminator address/}" "configs/gnb.yaml"
+
+    if [ -n "$IP_E2TERM_BIND" ]; then
+        update_yaml "configs/gnb.yaml" "e2" "bind_addr" "$IP_E2TERM_BIND"
+    else
+        update_yaml "configs/gnb.yaml" "e2" "bind_addr" "$HOST_IP"
+    fi
+
     update_yaml "configs/gnb.yaml" "e2" "port" "$PORT_E2TERM"
-    update_yaml "configs/gnb.yaml" "e2" "sm_dir" "$FULL_SM_DIR"
 else
     update_yaml "configs/gnb.yaml" "e2" "enable_cu_cp_e2" "false"
     update_yaml "configs/gnb.yaml" "e2" "enable_cu_up_e2" "false"
