@@ -405,7 +405,7 @@ cd "OpenAirInterface_Testbed\User_Equipment" >nul 2>&1
 if not errorlevel 1 (
     git clone https://gitlab.eurecom.fr/oai/openairinterface5g.git
     cd "openairinterface5g"
-    git checkout d420f8c1231e9651e299b714fde53e392c6880ec
+    git checkout 26efcc498931b8f6979c39f9f44400f3c965fdc4
     cd ..\..\..
 ) else (
     echo ERROR: Failed to cd to OpenAirInterface_Testbed\User_Equipment. Skipping clone.
@@ -421,7 +421,7 @@ cd "OpenAirInterface_Testbed\Next_Generation_Node_B" >nul 2>&1
 if not errorlevel 1 (
     git clone https://gitlab.eurecom.fr/oai/o1-adapter.git
     cd "o1-adapter"
-    git checkout 1cd696960d9b3d28461caa61ced4b173eff1eec9
+    git checkout cb424e4c6ca1cecdd331f52a87eca916f49d7d05
     cd ..\..\..
 ) else (
     echo ERROR: Failed to cd to OpenAirInterface_Testbed\Next_Generation_Node_B. Skipping clone.
@@ -433,7 +433,7 @@ cd "OpenAirInterface_Testbed\RAN_Intelligent_Controllers\Flexible-RIC" >nul 2>&1
 if not errorlevel 1 (
     git clone https://github.com/swig/swig.git
     cd "swig"
-    git checkout c02d4fe134e072e4f0c28413f883a6f5c4e8d32f
+    git checkout f5c98866f77abce0a0d73c38b2bde21d26244f23
     cd ..\..\..\..
 ) else (
     echo ERROR: Failed to cd to OpenAirInterface_Testbed\RAN_Intelligent_Controllers\Flexible-RIC. Skipping clone.
@@ -445,7 +445,7 @@ cd "OpenAirInterface_Testbed\RAN_Intelligent_Controllers\Flexible-RIC" >nul 2>&1
 if not errorlevel 1 (
     git clone https://gitlab.eurecom.fr/mosaic5g/flexric.git
     cd "flexric"
-    git checkout 7805d63c3157dee630f11d6eef2f5ed540f5209a
+    git checkout ef6d722f22191eea74089966983da1f5ec1fedd4
     cd ..\..\..\..
 ) else (
     echo ERROR: Failed to cd to OpenAirInterface_Testbed\RAN_Intelligent_Controllers\Flexible-RIC. Skipping clone.
